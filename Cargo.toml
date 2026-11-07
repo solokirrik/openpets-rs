@@ -1,0 +1,30 @@
+[package]
+name = "openpets-rs"
+version = "0.1.0"
+edition = "2024"
+description = "A tiny macOS desktop pet that walks along your screen and talks to coding agents over MCP."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "openpets-rs"
+path = "src/main.rs"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order keeps Claude Code settings keys where the user put them.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-foundation = "0.3"
+objc2-quartz-core = "0.3"
+
+[profile.release]
+lto = true
+strip = true
