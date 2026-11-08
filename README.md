@@ -55,7 +55,7 @@ openpets-rs uninstall-hooks   # removes only those entries
 
 | Claude Code event | Pet |
 |-------------------|-----|
-| `UserPromptSubmit` | thinking |
+| `UserPromptSubmit` | thinking, held until the next reaction (or 10 min) |
 | `PreToolUse` on Edit, Write or MultiEdit | editing |
 | `PreToolUse` on a Bash test command (`cargo test`, `pnpm test`, …) | testing |
 | `PermissionRequest` | waiting + "Approval needed" and a `!` badge (a question line and `?` for AskUserQuestion) |

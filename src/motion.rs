@@ -28,7 +28,11 @@ impl Anim {
             Anim::Waving => 1.4,
             Anim::Jumping => 1.7,
             Anim::Failed => 2.5,
-            // Looping rows describe ongoing work; hold them a while.
+            // Thinking lasts until the agent's next reaction replaces it
+            // (an edit, a question, the reply finishing). The cap only
+            // matters if that never comes, e.g. the session was closed.
+            Anim::Review => THINKING_MAX_SECS,
+            // Other looping rows describe ongoing work; hold them a while.
             _ => 8.0,
         }
     }
@@ -69,6 +73,7 @@ const GRAVITY: f64 = 2400.0;
 /// How fast the pet steps up when the floor rises (the Dock sliding in);
 /// about as fast as the Dock itself.
 const LIFT_SPEED: f64 = 400.0;
+const THINKING_MAX_SECS: f64 = 10.0 * 60.0;
 
 pub struct Motion {
     pub x: f64,
@@ -302,6 +307,18 @@ mod tests {
 
         let after = run(&mut motion, 1.0);
         assert_ne!(after.last(), Some(&Anim::Failed));
+    }
+
+    #[test]
+    fn thinking_holds_until_the_next_reaction() {
+        let mut motion = Motion::new(150.0, 40.0, 7);
+        motion.react(Reaction::Thinking);
+
+        let minute = run(&mut motion, 60.0);
+        assert!(minute.iter().all(|anim| *anim == Anim::Review));
+
+        motion.react(Reaction::Editing);
+        assert_ne!(motion.tick(1.0 / 60.0, BOUNDS), Anim::Review);
     }
 
     #[test]
