@@ -29,17 +29,18 @@ claude mcp add openpets -- /path/to/openpets-rs mcp
 claude mcp add openpets -- /path/to/OpenPets.app/Contents/MacOS/openpets-rs mcp
 ```
 
-Tools (the same contract as the OpenPets MCP package):
+Tools (the OpenPets MCP package contract, plus a timer):
 
 | Tool | Arguments |
 |------|-----------|
 | `openpets_status` | none |
 | `openpets_react` | `reaction`: `idle`, `thinking`, `working`, `editing`, `running`, `testing`, `waiting`, `waving`, `success`, `error` or `celebrating` |
 | `openpets_say` | `message` (max 140 chars, one line, no code, URLs, paths or secrets), plus an optional `reaction` |
+| `openpets_start_timer` | `minutes` (whole number, 1–1440); replaces a running timer |
 
-If the pet isn't running, the MCP server starts it on the first `react` or
-`say` call. `openpets_status` reports `appRunning: false` instead, and isn't
-an error. Results include `structuredContent`, and tools carry titles and
+If the pet isn't running, the MCP server starts it on the first `react`,
+`say` or timer call. `openpets_status` reports `appRunning: false` instead,
+and isn't an error. Results include `structuredContent`, and tools carry titles and
 read-only/idempotent annotations.
 
 ## Claude Code hooks

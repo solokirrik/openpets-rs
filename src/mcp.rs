@@ -1,6 +1,6 @@
 //! `openpets-rs mcp`: a stdio MCP server that forwards tool calls to the app.
 //!
-//! MCP over stdio is newline-delimited JSON-RPC 2.0. The surface is three
+//! MCP over stdio is newline-delimited JSON-RPC 2.0. The surface is a few
 //! tools, so the protocol is handled directly with `serde_json` instead of
 //! pulling in an async runtime. Stdout carries protocol messages only; all
 //! diagnostics go to stderr.
@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::ipc::{self, Request, Response};
 use crate::paths;
 use crate::reaction::Reaction;
+use crate::timer::{MAX_MINUTES, validate_minutes};
 
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
     ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
@@ -147,6 +148,19 @@ fn tool_definitions() -> Value {
                 "required": ["message"]
             },
             "annotations": { "readOnlyHint": false, "idempotentHint": false }
+        },
+        {
+            "name": "openpets_start_timer",
+            "title": "OpenPets Start Timer",
+            "description": "Start a countdown shown above the OpenPets desktop pet; the pet celebrates with a chime when it ends. Replaces a running timer. Use only when the user asks for a timer.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "minutes": { "type": "integer", "minimum": 1, "maximum": MAX_MINUTES }
+                },
+                "required": ["minutes"]
+            },
+            "annotations": { "readOnlyHint": false, "idempotentHint": false }
         }
     ])
 }
@@ -202,6 +216,17 @@ fn build_request(name: &str, arguments: &Value) -> Result<Request, String> {
             };
             Ok(Request::Say { message, reaction })
         }
+        "openpets_start_timer" => {
+            let minutes = arguments
+                .get("minutes")
+                .and_then(Value::as_u64)
+                .ok_or(format!(
+                    "minutes must be a whole number from 1 to {MAX_MINUTES}."
+                ))?;
+            Ok(Request::StartTimer {
+                minutes: validate_minutes(minutes)?,
+            })
+        }
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -245,6 +270,10 @@ fn tool_success(request: &Request, response: &Response) -> Value {
         Request::Say { reaction, .. } => (
             "OpenPets message shown.".to_owned(),
             json!({ "ok": true, "reaction": reaction.map(Reaction::name) }),
+        ),
+        Request::StartTimer { minutes } => (
+            format!("OpenPets timer started for {minutes} min."),
+            json!({ "ok": true, "minutes": minutes }),
         ),
     };
     json!({
@@ -333,7 +362,15 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
 
-        assert_eq!(names, ["openpets_status", "openpets_react", "openpets_say"]);
+        assert_eq!(
+            names,
+            [
+                "openpets_status",
+                "openpets_react",
+                "openpets_say",
+                "openpets_start_timer"
+            ]
+        );
     }
 
     #[test]
@@ -385,6 +422,35 @@ mod tests {
         );
 
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn timer_is_started_in_the_app() {
+        let mut sent = Vec::new();
+        let result = call(
+            "openpets_start_timer",
+            json!({ "minutes": 25 }),
+            &mut |request| {
+                sent.push(request.clone());
+                Ok(glitchcat())
+            },
+        );
+
+        assert_eq!(result["isError"], false);
+        assert_eq!(sent, [Request::StartTimer { minutes: 25 }]);
+    }
+
+    #[test]
+    fn timer_outside_one_minute_to_one_day_is_refused() {
+        for minutes in [json!(0), json!(1441), json!(-5), json!(2.5), json!("10")] {
+            let result = call(
+                "openpets_start_timer",
+                json!({ "minutes": minutes }),
+                &mut |_| unreachable!(),
+            );
+
+            assert_eq!(result["isError"], true, "minutes {minutes}");
+        }
     }
 
     #[test]

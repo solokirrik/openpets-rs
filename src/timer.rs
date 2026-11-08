@@ -8,6 +8,17 @@ use std::time::{Duration, SystemTime};
 
 /// Durations offered in the Timer menu, in minutes.
 pub const PRESET_MINUTES: [u64; 4] = [5, 15, 25, 60];
+/// Longest timer an agent may start: one day.
+pub const MAX_MINUTES: u64 = 24 * 60;
+
+/// Checks a requested duration from outside the app (MCP, the socket).
+pub fn validate_minutes(minutes: u64) -> Result<u64, String> {
+    if (1..=MAX_MINUTES).contains(&minutes) {
+        Ok(minutes)
+    } else {
+        Err(format!("Timer minutes must be from 1 to {MAX_MINUTES}."))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timer {

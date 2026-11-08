@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::reaction::{Reaction, validate_message};
+use crate::timer::validate_minutes;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_REQUEST_BYTES: u64 = 4096;
@@ -28,6 +29,10 @@ pub enum Request {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reaction: Option<Reaction>,
+    },
+    /// Starts (or replaces) the countdown above the pet.
+    StartTimer {
+        minutes: u64,
     },
 }
 
@@ -120,6 +125,9 @@ fn parse_request(line: &str) -> Result<Request, String> {
             let message = validate_message(&message)?;
             Ok(Request::Say { message, reaction })
         }
+        Request::StartTimer { minutes } => Ok(Request::StartTimer {
+            minutes: validate_minutes(minutes)?,
+        }),
         other => Ok(other),
     }
 }

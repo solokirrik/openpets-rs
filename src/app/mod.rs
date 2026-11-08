@@ -226,6 +226,7 @@ impl App {
                 self.window.show_bubble(&message);
                 self.bubble_until = Some(Instant::now() + Duration::from_secs_f64(visible_secs));
             }
+            Request::StartTimer { minutes } => self.start_timer(minutes),
         }
         Response::ok(PetInfo {
             id: self.current.id.clone(),
