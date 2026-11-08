@@ -1,5 +1,5 @@
-//! The transparent floating panel that shows the pet, its speech bubble and
-//! the timer countdown.
+//! The transparent floating panel that shows the pet, its speech bubble,
+//! the timer countdown and the pixel-art `?`/`!` emote.
 //!
 //! The panel is wider and taller than the pet so the bubble fits above it.
 //! It ignores the mouse except while the cursor is over the pet itself, so
@@ -13,17 +13,26 @@ use objc2_app_kit::{
     NSStatusWindowLevel, NSTextField, NSTitlePosition, NSView, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSData, NSPoint, NSRect, NSSize, NSString};
-use objc2_quartz_core::{CALayer, CATransaction};
+use objc2_core_foundation::CFRetained;
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSData, NSNumber, NSPoint, NSRect, NSSize, NSString, ns_string,
+};
+use objc2_quartz_core::{
+    CAKeyframeAnimation, CALayer, CAMediaTiming, CATransaction, kCAFilterNearest,
+};
 
+use super::pet_icon;
+use crate::emote;
 use crate::pet::{COLUMNS, FRAME_HEIGHT, FRAME_WIDTH};
+use crate::reaction::Badge;
 
 pub const PET_SCALE: f64 = 0.5;
 pub const PET_WIDTH: f64 = FRAME_WIDTH * PET_SCALE;
 pub const PET_HEIGHT: f64 = FRAME_HEIGHT * PET_SCALE;
 
 const WINDOW_WIDTH: f64 = 240.0;
-const BUBBLE_SPACE: f64 = 96.0;
+/// Room above the pet for the pill, the emote and the bubble stacked up.
+const BUBBLE_SPACE: f64 = 150.0;
 const WINDOW_HEIGHT: f64 = PET_HEIGHT + BUBBLE_SPACE;
 /// Horizontal offset of the pet inside the panel.
 const PET_INSET_X: f64 = (WINDOW_WIDTH - PET_WIDTH) / 2.0;
@@ -38,6 +47,14 @@ const PILL_PADDING_X: f64 = 6.0;
 /// Frames leave empty space above the pet's head; the pill sits in it.
 const PILL_OVERLAP: f64 = 10.0;
 
+/// Points per emote pixel: big, chunky pixels like the pets themselves.
+const EMOTE_PIXEL: f64 = 4.0;
+/// The emote sinks a little into the empty space above the pet's head.
+const EMOTE_OVERLAP: f64 = 6.0;
+const EMOTE_GAP: f64 = 2.0;
+/// One small bounce, then a rest, repeated so a waiting emote catches the eye.
+const EMOTE_BOUNCE_SECONDS: f64 = 2.0;
+
 pub struct PetWindow {
     panel: Retained<NSPanel>,
     sprite: Retained<CALayer>,
@@ -45,6 +62,7 @@ pub struct PetWindow {
     bubble_label: Retained<NSTextField>,
     pill: Retained<NSBox>,
     pill_label: Retained<NSTextField>,
+    emote: Retained<CALayer>,
     /// The spritesheet the layer shows; kept alive here.
     image: Option<Retained<NSImage>>,
     rows: f64,
@@ -76,6 +94,17 @@ impl PetWindow {
         // the mouse over the pet, so the pill itself is never clickable.
         let (pill, pill_label) = create_pill(mtm);
         content.addSubview(&pill);
+        // A plain layer added last, so it draws above the views.
+        let emote = CALayer::new();
+        // SAFETY: the filter constant is an immutable static.
+        emote.setMagnificationFilter(unsafe { kCAFilterNearest });
+        emote.setHidden(true);
+        // AppKit may reorder its views' layers; keep the emote in front.
+        emote.setZPosition(1.0);
+        content
+            .layer()
+            .expect("layer-backed content view")
+            .addSublayer(&emote);
 
         panel.orderFrontRegardless();
 
@@ -86,6 +115,7 @@ impl PetWindow {
             bubble_label,
             pill,
             pill_label,
+            emote,
             image: None,
             rows: 9.0,
             ignores_mouse: true,
@@ -170,13 +200,76 @@ impl PetWindow {
         self.bubble.setHidden(true);
     }
 
-    /// The bubble rises above the pill while a timer is showing.
+    /// The bubble rises above the pill and the emote while they show.
     fn bubble_bottom(&self) -> f64 {
-        if self.pill.isHidden() {
-            PET_HEIGHT + BUBBLE_GAP
-        } else {
-            self.pill.frame().origin.y + PILL_HEIGHT + BUBBLE_GAP
+        let mut bottom = PET_HEIGHT + BUBBLE_GAP;
+        if !self.pill.isHidden() {
+            let pill = self.pill.frame();
+            bottom = bottom.max(pill.origin.y + pill.size.height + BUBBLE_GAP);
         }
+        if !self.emote.isHidden() {
+            let emote = self.emote.frame();
+            bottom = bottom.max(emote.origin.y + emote.size.height + BUBBLE_GAP);
+        }
+        bottom
+    }
+
+    /// Shows the pixel-art emote for `badge` over the pet's head, bouncing
+    /// gently until hidden.
+    pub fn show_badge(&self, badge: Badge) {
+        let art = emote::render(badge);
+        let Some(image) = pet_icon::cg_image(&art) else {
+            eprintln!("[pet-window] cannot draw the {badge:?} emote");
+            return;
+        };
+        let size = NSSize::new(
+            art.width as f64 * EMOTE_PIXEL,
+            art.height as f64 * EMOTE_PIXEL,
+        );
+        // SAFETY: a CGImage is a valid CALayer contents object.
+        let contents: &AnyObject = unsafe { &*CFRetained::as_ptr(&image).as_ptr().cast() };
+        without_animation(|| {
+            // SAFETY: as above.
+            unsafe { self.emote.setContents(Some(contents)) };
+            self.emote
+                .setBounds(NSRect::new(NSPoint::new(0.0, 0.0), size));
+            self.emote.setHidden(false);
+            self.place_emote();
+        });
+        self.emote.removeAllAnimations();
+        self.emote
+            .addAnimation_forKey(&bounce(), Some(ns_string!("bounce")));
+    }
+
+    pub fn hide_badge(&self) {
+        self.emote.removeAllAnimations();
+        without_animation(|| self.emote.setHidden(true));
+        self.restack_bubble();
+    }
+
+    /// Centres the emote over the head, above the timer pill when it shows.
+    fn place_emote(&self) {
+        let size = self.emote.bounds().size;
+        let bottom = if self.pill.isHidden() {
+            PET_HEIGHT - EMOTE_OVERLAP
+        } else {
+            let pill = self.pill.frame();
+            pill.origin.y + pill.size.height + EMOTE_GAP
+        };
+        let origin = NSPoint::new((WINDOW_WIDTH - size.width) / 2.0, bottom);
+        without_animation(|| self.emote.setFrame(NSRect::new(origin, size)));
+        self.restack_bubble();
+    }
+
+    /// Re-stacks a showing bubble directly above the pill and emote, which
+    /// can appear or go after it (an approval sends its line before its badge).
+    fn restack_bubble(&self) {
+        if self.bubble.isHidden() {
+            return;
+        }
+        let mut frame = self.bubble.frame();
+        frame.origin.y = self.bubble_bottom();
+        self.bubble.setFrame(frame);
     }
 
     /// Shows `text` (the time left) in the pill above the pet's head.
@@ -192,10 +285,12 @@ impl PetWindow {
         self.pill
             .setFrame(NSRect::new(origin, NSSize::new(width, PILL_HEIGHT)));
         self.pill.setHidden(false);
+        self.place_emote();
     }
 
     pub fn hide_countdown(&self) {
         self.pill.setHidden(true);
+        self.place_emote();
     }
 }
 
@@ -260,6 +355,30 @@ fn create_bubble(mtm: MainThreadMarker) -> (Retained<NSBox>, Retained<NSTextFiel
     let content: Retained<NSView> = bubble.contentView().expect("box has a content view");
     content.addSubview(&label);
     (bubble, label)
+}
+
+/// A hop of a few points, then a rest, forever.
+fn bounce() -> Retained<CAKeyframeAnimation> {
+    let animation =
+        CAKeyframeAnimation::animationWithKeyPath(Some(ns_string!("transform.translation.y")));
+    let numbers = |values: &[f64]| {
+        let numbers: Vec<Retained<NSNumber>> = values
+            .iter()
+            .map(|value| NSNumber::new_f64(*value))
+            .collect();
+        NSArray::from_retained_slice(&numbers)
+    };
+    let heights = numbers(&[0.0, 5.0, 0.0, 2.0, 0.0, 0.0]);
+    // SAFETY: an array of NSNumber is an array of objects (NSArray is
+    // covariant), and a translation animation takes NSNumber values.
+    unsafe {
+        let heights: Retained<NSArray> = Retained::cast_unchecked(heights);
+        animation.setValues(Some(&heights));
+    }
+    animation.setKeyTimes(Some(&numbers(&[0.0, 0.08, 0.16, 0.22, 0.28, 1.0])));
+    animation.setDuration(EMOTE_BOUNCE_SECONDS);
+    animation.setRepeatCount(f32::INFINITY);
+    animation
 }
 
 /// A dark, rounded label for the countdown.

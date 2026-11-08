@@ -275,6 +275,10 @@ fn tool_success(request: &Request, response: &Response) -> Value {
             format!("OpenPets timer started for {minutes} min."),
             json!({ "ok": true, "minutes": minutes }),
         ),
+        Request::SetBadge { badge } => (
+            "OpenPets badge updated.".to_owned(),
+            json!({ "ok": true, "badge": badge }),
+        ),
     };
     json!({
         "content": [{ "type": "text", "text": text }],

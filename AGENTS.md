@@ -74,6 +74,10 @@ immediately.
   the cursor position are invisible there (window lists come back empty,
   cursor reads 0). Probe such things from inside the app and log to stderr
   (`open --stderr <file> ~/Applications/OpenPets.app`).
+- Hook runs are separate, concurrent (`async: true`) processes sharing
+  `hook-state.json` (throttle times, per-session badges) by read-modify-write.
+  A lost update is accepted: worst case one reaction repeats or a badge
+  clears on the next event.
 - Memory: ~32 MB steady. ~11 MB is the decoded spritesheet, the rest is the
   AppKit baseline. Right after launch it reads ~45 MB because a transient
   full-size spritesheet copy leaves a freed "Malloc Large" block cached;

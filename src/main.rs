@@ -9,6 +9,8 @@ mod app;
 mod claude_settings;
 #[cfg(target_os = "macos")]
 mod dock;
+#[cfg(target_os = "macos")]
+mod emote;
 mod hook;
 mod icon;
 mod ipc;

@@ -25,7 +25,7 @@ pub fn selected_pet_file() -> PathBuf {
     data_dir().join("selected-pet")
 }
 
-/// When each hook reaction or speech line was last sent, shared by hook runs.
-pub fn hook_throttle_file() -> PathBuf {
-    data_dir().join("hook-throttle.json")
+/// State shared by hook runs: throttle times and the badges waiting on the user.
+pub fn hook_state_file() -> PathBuf {
+    data_dir().join("hook-state.json")
 }

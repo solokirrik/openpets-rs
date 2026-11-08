@@ -173,7 +173,7 @@ fn scaled(pixels: &Rgba, width: usize, height: usize) -> Option<Rgba> {
 }
 
 /// Copies `pixels` into a new image.
-fn cg_image(pixels: &Rgba) -> Option<CFRetained<CGImage>> {
+pub(super) fn cg_image(pixels: &Rgba) -> Option<CFRetained<CGImage>> {
     let context = bitmap_context(pixels.width, pixels.height)?;
     let mut source = pixels.clone();
     copy_rows(&context, &mut source, Direction::IntoContext)?;

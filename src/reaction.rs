@@ -1,4 +1,4 @@
-//! Reactions agents can request, and the safety rules for speech text.
+//! Reactions agents can request, badges, and the safety rules for speech text.
 //!
 //! The reaction names and the message rules match the OpenPets MCP contract so
 //! existing agent instructions keep working unchanged.
@@ -22,6 +22,15 @@ pub enum Reaction {
     Success,
     Error,
     Celebrating,
+}
+
+/// A mark above the pet's head that stays until the situation changes,
+/// for things that need the user: `?` for a question, `!` for an approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Badge {
+    Question,
+    Alert,
 }
 
 impl Reaction {

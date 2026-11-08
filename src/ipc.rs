@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::reaction::{Reaction, validate_message};
+use crate::reaction::{Badge, Reaction, validate_message};
 use crate::timer::validate_minutes;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -33,6 +33,11 @@ pub enum Request {
     /// Starts (or replaces) the countdown above the pet.
     StartTimer {
         minutes: u64,
+    },
+    /// Shows a badge above the pet, or clears it with `None`.
+    SetBadge {
+        #[serde(default)]
+        badge: Option<Badge>,
     },
 }
 

@@ -30,7 +30,7 @@ use crate::ipc::{self, Incoming, PetInfo, Request, Response};
 use crate::motion::{Anim, Bounds, Motion};
 use crate::paths;
 use crate::pet::{self, PetEntry};
-use crate::reaction::Reaction;
+use crate::reaction::{Badge, Reaction};
 use crate::timer::{self, Timer};
 use menu::StatusMenu;
 use pet_icon::Theme;
@@ -120,6 +120,8 @@ pub struct App {
     timer: Option<Timer>,
     /// The countdown text on screen, so the pill is redrawn once a second.
     countdown: String,
+    /// The badge above the pet's head, until the agent or a click clears it.
+    badge: Option<Badge>,
     dock: DockWatch,
     /// Where an auto-hiding Dock is showing right now, if anywhere.
     dock_revealed: Option<Revealed>,
@@ -147,6 +149,7 @@ impl App {
             theme_checked: now,
             timer: None,
             countdown: String::new(),
+            badge: None,
             dock: DockWatch::default(),
             dock_revealed: None,
         };
@@ -227,6 +230,7 @@ impl App {
                 self.bubble_until = Some(Instant::now() + Duration::from_secs_f64(visible_secs));
             }
             Request::StartTimer { minutes } => self.start_timer(minutes),
+            Request::SetBadge { badge } => self.set_badge(badge),
         }
         Response::ok(PetInfo {
             id: self.current.id.clone(),
@@ -276,6 +280,8 @@ impl App {
             self.motion.end_drag();
         } else {
             self.motion.react(Reaction::Waving);
+            // Clicking the pet means "seen it".
+            self.set_badge(None);
         }
     }
 
@@ -394,6 +400,18 @@ impl App {
         self.show_pet(pet);
         if let Err(error) = std::fs::write(paths::selected_pet_file(), &self.current.id) {
             eprintln!("[app] cannot remember the selected pet: {error}");
+        }
+    }
+
+    fn set_badge(&mut self, badge: Option<Badge>) {
+        if badge == self.badge {
+            return;
+        }
+        eprintln!("[badge] {badge:?}");
+        self.badge = badge;
+        match badge {
+            Some(badge) => self.window.show_badge(badge),
+            None => self.window.hide_badge(),
         }
     }
 
