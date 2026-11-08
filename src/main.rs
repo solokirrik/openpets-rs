@@ -7,6 +7,8 @@
 #[cfg(target_os = "macos")]
 mod app;
 mod claude_settings;
+#[cfg(target_os = "macos")]
+mod dock;
 mod hook;
 mod icon;
 mod ipc;

@@ -66,6 +66,9 @@ enum Activity {
 
 const WALK_SPEED: f64 = 70.0;
 const GRAVITY: f64 = 2400.0;
+/// How fast the pet steps up when the floor rises (the Dock sliding in);
+/// about as fast as the Dock itself.
+const LIFT_SPEED: f64 = 400.0;
 
 pub struct Motion {
     pub x: f64,
@@ -129,11 +132,11 @@ impl Motion {
 
     /// Advances the pet by `dt` seconds and returns the animation to show.
     pub fn tick(&mut self, dt: f64, bounds: Bounds) -> Anim {
+        self.follow_floor(dt, bounds);
         let anim = match self.activity {
             Activity::Drag { anim } => return anim,
             Activity::Fall { velocity_y } => self.fall(dt, velocity_y, bounds),
             Activity::React { anim, remaining } => {
-                self.y = bounds.floor_y;
                 let remaining = remaining - dt;
                 if remaining <= 0.0 {
                     self.activity = self.next_roam();
@@ -143,7 +146,6 @@ impl Motion {
                 anim
             }
             Activity::Idle { remaining } => {
-                self.y = bounds.floor_y;
                 let remaining = remaining - dt;
                 if remaining <= 0.0 {
                     self.activity = self.next_roam();
@@ -162,8 +164,20 @@ impl Motion {
         anim
     }
 
+    /// Keeps a standing pet on the floor when the floor moves: it steps up
+    /// smoothly when the floor rises and falls when the floor drops away.
+    fn follow_floor(&mut self, dt: f64, bounds: Bounds) {
+        if matches!(self.activity, Activity::Drag { .. } | Activity::Fall { .. }) {
+            return;
+        }
+        if self.y > bounds.floor_y {
+            self.activity = Activity::Fall { velocity_y: 0.0 };
+        } else if self.y < bounds.floor_y {
+            self.y = (self.y + LIFT_SPEED * dt).min(bounds.floor_y);
+        }
+    }
+
     fn walk(&mut self, dt: f64, direction: f64, remaining: f64, bounds: Bounds) -> Anim {
-        self.y = bounds.floor_y;
         if self.paused {
             self.activity = Activity::Idle { remaining: 1.0 };
             return Anim::Idle;
@@ -298,6 +312,30 @@ mod tests {
         motion.end_drag();
         run(&mut motion, 2.0);
 
+        assert_eq!(motion.y, BOUNDS.floor_y);
+    }
+
+    #[test]
+    fn pet_steps_up_when_the_floor_rises_and_falls_when_it_drops() {
+        let mut motion = Motion::new(150.0, 40.0, 7);
+        motion.paused = true;
+        let raised = Bounds {
+            floor_y: 124.0,
+            ..BOUNDS
+        };
+
+        motion.tick(1.0 / 60.0, raised);
+        assert!(
+            motion.y > 40.0 && motion.y < 124.0,
+            "no teleport: {}",
+            motion.y
+        );
+        for _ in 0..60 {
+            motion.tick(1.0 / 60.0, raised);
+        }
+        assert_eq!(motion.y, 124.0);
+
+        run(&mut motion, 1.0);
         assert_eq!(motion.y, BOUNDS.floor_y);
     }
 

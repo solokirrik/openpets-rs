@@ -15,6 +15,7 @@ scripts/bundle.sh         # build target/bundle/OpenPets.app
 
 - **Drag** the pet anywhere. When you let go, it drops back to the bottom of the screen.
 - **Click** the pet to make it wave.
+- With an auto-hiding Dock, the pet steps up onto the Dock while it is shown and drops back down when it hides.
 - **Right-click** the pet, or use the **menu bar item**, to pick a pet, start a timer, pause walking, open the pets folder, or quit.
 - **Timer** (5 min to 1 hour) shows a small countdown above the pet; when it ends the pet celebrates with a chime. It is not saved across restarts.
 

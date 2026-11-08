@@ -63,6 +63,17 @@ immediately.
   (scratch/temp dirs are often too long). Data dir is created with mode 0700.
 - `Instant` does not advance during sleep on macOS; wall-clock deadlines (the
   timer) use `SystemTime`.
+- An auto-hiding Dock has no API or notification. The app mirrors the
+  Dock's rule from the cursor (bottom edge reveals, leaving the Dock area
+  hides) and estimates its size from `com.apple.dock` (`tilesize`, pinned
+  apps, recents, stacks) plus running unpinned apps. Only divider/padding
+  widths are guesses. Exact geometry needs the Accessibility permission,
+  which was judged not worth it. The pet steps up when any part of it
+  overlaps the Dock (using its centre let the first icon cover it).
+- Commands run from the agent shell are sandboxed: other apps' windows and
+  the cursor position are invisible there (window lists come back empty,
+  cursor reads 0). Probe such things from inside the app and log to stderr
+  (`open --stderr <file> ~/Applications/OpenPets.app`).
 - Memory: ~32 MB steady. ~11 MB is the decoded spritesheet, the rest is the
   AppKit baseline. Right after launch it reads ~45 MB because a transient
   full-size spritesheet copy leaves a freed "Malloc Large" block cached;

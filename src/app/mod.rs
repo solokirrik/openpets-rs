@@ -17,12 +17,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use block2::RcBlock;
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2_app_kit::NSWorkspace;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEvent, NSMenu, NSScreen, NSSound,
 };
-use objc2_foundation::ns_string;
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSTimer};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSUserDefaults, ns_string};
 
+use crate::dock::{DockSettings, DockWatch, Revealed};
 use crate::ipc::{self, Incoming, PetInfo, Request, Response};
 use crate::motion::{Anim, Bounds, Motion};
 use crate::paths;
@@ -117,6 +120,9 @@ pub struct App {
     timer: Option<Timer>,
     /// The countdown text on screen, so the pill is redrawn once a second.
     countdown: String,
+    dock: DockWatch,
+    /// Where an auto-hiding Dock is showing right now, if anywhere.
+    dock_revealed: Option<Revealed>,
 }
 
 impl App {
@@ -141,6 +147,8 @@ impl App {
             theme_checked: now,
             timer: None,
             countdown: String::new(),
+            dock: DockWatch::default(),
+            dock_revealed: None,
         };
 
         let saved = std::fs::read_to_string(paths::selected_pet_file()).unwrap_or_default();
@@ -158,6 +166,7 @@ impl App {
 
         self.answer_requests();
         self.update_click_through();
+        self.watch_dock();
 
         let bounds = self.current_bounds();
         let anim = self.motion.tick(dt, bounds);
@@ -287,11 +296,41 @@ impl App {
             self.motion.y + PET_HEIGHT / 2.0,
         );
         let visible = screen_containing(self.mtm, centre);
+        let mut floor_y = visible.origin.y;
+        // Step up onto a revealed Dock as soon as any part of the pet is over it.
+        if let Some(dock) = self.dock_revealed
+            && dock.overlaps(self.motion.x, self.motion.x + PET_WIDTH)
+        {
+            floor_y = floor_y.max(dock.bottom + dock.height);
+        }
         Bounds {
             min_x: visible.origin.x,
             max_x: visible.origin.x + visible.size.width - PET_WIDTH,
-            floor_y: visible.origin.y,
+            floor_y,
         }
+    }
+
+    /// Follows the auto-hiding Dock from the cursor position (see `crate::dock`).
+    fn watch_dock(&mut self) {
+        let cursor = NSEvent::mouseLocation();
+        let display = display_frame(self.mtm, cursor);
+        let display = (
+            display.origin.x,
+            display.origin.y,
+            display.origin.x + display.size.width,
+        );
+        let revealed = self.dock.update((cursor.x, cursor.y), display, || {
+            dock_settings().reveal_size()
+        });
+        match (self.dock_revealed, revealed) {
+            (None, Some(dock)) => eprintln!(
+                "[dock] shown: x {:.0}..{:.0}, {:.0} pt tall",
+                dock.left, dock.right, dock.height
+            ),
+            (Some(_), None) => eprintln!("[dock] hidden"),
+            _ => {}
+        }
+        self.dock_revealed = revealed;
     }
 
     /// Shows `pet`, falling back to the bundled pet if it cannot be loaded.
@@ -453,19 +492,97 @@ impl PetRect {
     }
 }
 
+/// The usable area (without menu bar and a pinned Dock) of the display
+/// under `point`.
 fn screen_containing(mtm: MainThreadMarker, point: NSPoint) -> NSRect {
-    let screens = NSScreen::screens(mtm);
-    for screen in screens.iter() {
-        let frame = screen.frame();
-        let inside_x = point.x >= frame.origin.x && point.x < frame.origin.x + frame.size.width;
-        let inside_y = point.y >= frame.origin.y && point.y < frame.origin.y + frame.size.height;
-        if inside_x && inside_y {
-            return screen.visibleFrame();
-        }
-    }
-    NSScreen::mainScreen(mtm)
+    screen_at(mtm, point)
         .map(|screen| screen.visibleFrame())
         .unwrap_or_default()
+}
+
+/// The full frame of the display under `point`.
+fn display_frame(mtm: MainThreadMarker, point: NSPoint) -> NSRect {
+    screen_at(mtm, point)
+        .map(|screen| screen.frame())
+        .unwrap_or_default()
+}
+
+/// The display under `point`, or the main display when it is off-screen.
+fn screen_at(mtm: MainThreadMarker, point: NSPoint) -> Option<Retained<NSScreen>> {
+    let screens = NSScreen::screens(mtm);
+    let under = screens.iter().find(|screen| {
+        let frame = screen.frame();
+        let inside_x = point.x >= frame.origin.x && point.x < frame.origin.x + frame.size.width;
+        // The cursor can sit exactly on the bottom edge (y == origin.y).
+        let inside_y = point.y >= frame.origin.y && point.y <= frame.origin.y + frame.size.height;
+        inside_x && inside_y
+    });
+    under.or_else(|| NSScreen::mainScreen(mtm))
+}
+
+/// The user's Dock settings and contents. Missing keys mean the macOS
+/// defaults: always shown, at the bottom, 48-point icons, recent apps shown.
+fn dock_settings() -> DockSettings {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let dock = defaults.persistentDomainForName(ns_string!("com.apple.dock"));
+    let value = |key: &str| dock.as_ref()?.objectForKey(&NSString::from_str(key));
+    let number = |key: &str| {
+        value(key).and_then(|object| object.downcast_ref::<NSNumber>().map(NSNumber::doubleValue))
+    };
+    let orientation = value("orientation")
+        .and_then(|object| object.downcast_ref::<NSString>().map(NSString::to_string));
+    let list = |key: &str| {
+        value(key)
+            .and_then(|object| object.downcast::<NSArray>().ok())
+            .map(|array| array.to_vec())
+            .unwrap_or_default()
+    };
+
+    let pinned = list("persistent-apps");
+    let pinned_ids: Vec<String> = pinned
+        .iter()
+        .filter_map(|tile| tile_bundle_id(tile))
+        .collect();
+    let show_recents = number("show-recents").is_none_or(|flag| flag != 0.0);
+    let recents = if show_recents {
+        list("recent-apps").len()
+    } else {
+        0
+    };
+    let others = list("persistent-others").len();
+
+    // Finder, pinned apps, open apps that are not pinned, recents, the
+    // stacks, and the Trash.
+    let tiles = 1 + pinned.len() + open_unpinned_apps(&pinned_ids) + recents + others + 1;
+    let dividers = 1 + usize::from(recents > 0);
+    DockSettings {
+        autohide: number("autohide").is_some_and(|flag| flag != 0.0),
+        at_bottom: orientation.is_none_or(|side| side == "bottom"),
+        tile_size: number("tilesize").unwrap_or(48.0),
+        tiles,
+        dividers,
+    }
+}
+
+/// `tile-data.bundle-identifier` of a Dock tile entry.
+fn tile_bundle_id(tile: &AnyObject) -> Option<String> {
+    let tile = tile.downcast_ref::<NSDictionary>()?;
+    let data = tile.objectForKey(ns_string!("tile-data"))?;
+    let data = data.downcast_ref::<NSDictionary>()?;
+    let id = data.objectForKey(ns_string!("bundle-identifier"))?;
+    Some(id.downcast_ref::<NSString>()?.to_string())
+}
+
+/// Apps with a Dock icon that are running but not pinned. Finder is left
+/// out because it is always counted.
+fn open_unpinned_apps(pinned: &[String]) -> usize {
+    NSWorkspace::sharedWorkspace()
+        .runningApplications()
+        .iter()
+        .filter(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular)
+        .filter_map(|app| app.bundleIdentifier().map(|id| id.to_string()))
+        .filter(|id| id != "com.apple.finder" && !pinned.contains(id))
+        .count()
 }
 
 /// The pet starts near the right side of the main display's bottom edge.
