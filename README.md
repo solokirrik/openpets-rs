@@ -79,19 +79,7 @@ pets/fox/
 
 Glitchcat is bundled; a folder named `glitchcat` is ignored so it is not listed twice. Folders that are invalid are skipped and logged.
 
-## Layout
-
-| File | Responsibility |
-|------|----------------|
-| `src/main.rs` | Picks the mode: app or `mcp` |
-| `src/app/` | AppKit shell: the floating panel, sprite layer, speech bubble, pet mouse view, menu bar item, and a 60 Hz tick |
-| `src/motion.rs` | Pure behaviour: roaming, reactions, dragging, falling |
-| `src/pet.rs` | Pet folders, spritesheet layout, frame timing |
-| `src/reaction.rs` | Reaction names and speech safety rules |
-| `src/ipc.rs` | Unix socket protocol between the MCP server and the app |
-| `src/mcp.rs` | Stdio JSON-RPC MCP server |
-| `src/hook.rs` | Claude Code hook event → reaction mapping and throttling |
-| `src/claude_settings.rs` | Adds and removes the hook entries in Claude Code settings |
+## Development
 
 Set `OPENPETS_RS_HOME` to use another data directory. Keep that path short,
 because Unix socket paths are limited to 104 bytes.
