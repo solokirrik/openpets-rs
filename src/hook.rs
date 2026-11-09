@@ -9,9 +9,10 @@
 //! A permission request also puts a badge over the pet (`?` for a question,
 //! `!` for an approval), and a finished answer puts up `i`. A badge stays
 //! until that session's next event: Claude Code has no "answered" or "read"
-//! event, but the session always moves on once the user responds. Badges
+//! event, but the session always moves on once the user responds. `?`/`!`
 //! are tracked per session, so another session carrying on does not clear
-//! one still waiting on the user, and `?`/`!` outrank `i`.
+//! one still waiting on the user, and they outrank `i`. A prompt in any
+//! session clears every `i`: the user is back and has seen the answers.
 //!
 //! `openpets-rs hook agy <Event>` does the same for Antigravity (`agy`),
 //! whose payloads carry no event name (hence the argument) and which runs
@@ -85,6 +86,8 @@ pub struct Decision {
     pub speech: Option<Speech>,
     /// Set while the session waits on the user.
     pub badge: Option<Badge>,
+    /// The user sent a prompt, so they are at the keyboard.
+    pub user_prompt: bool,
 }
 
 static TEST_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
@@ -122,6 +125,7 @@ pub fn map_event(payload: &Value) -> Option<Decision> {
         reaction,
         speech,
         badge,
+        user_prompt: event == "UserPromptSubmit",
     })
 }
 
@@ -163,6 +167,7 @@ pub fn map_agy_event(event: &str, payload: &Value) -> Option<Decision> {
         reaction,
         speech: None,
         badge: None,
+        user_prompt: false,
     };
 
     match event {
@@ -170,12 +175,16 @@ pub fn map_agy_event(event: &str, payload: &Value) -> Option<Decision> {
         // (0-based) starts a turn, later ones would undo editing/testing.
         "PreInvocation" => {
             let first = payload.get("invocationNum").and_then(Value::as_u64) == Some(0);
-            first.then(|| quiet(Reaction::Thinking))
+            first.then(|| Decision {
+                user_prompt: true,
+                ..quiet(Reaction::Thinking)
+            })
         }
         "PreToolUse" if tool == AGY_QUESTION_TOOL => Some(Decision {
             reaction: Reaction::Waiting,
             speech: Some(Speech::Question),
             badge: Some(Badge::Question),
+            user_prompt: false,
         }),
         "PostToolUse" if AGY_EDIT_TOOLS.contains(&tool) => Some(quiet(Reaction::Editing)),
         "PostToolUse" if tool == AGY_COMMAND_TOOL => {
@@ -196,6 +205,7 @@ pub fn map_agy_event(event: &str, payload: &Value) -> Option<Decision> {
                     reaction: Reaction::Error,
                     speech: Some(Speech::Error),
                     badge: Some(Badge::Info),
+                    user_prompt: false,
                 })
             } else if reason.contains("CANCEL") {
                 None
@@ -316,6 +326,12 @@ impl BadgeBoard {
         (badge.is_some() || wanted != self.shown).then_some(wanted)
     }
 
+    /// Drops every session's `i`; the next `update` reports the change.
+    pub fn clear_info(&mut self) {
+        self.pending
+            .retain(|_, pending| pending.badge != Badge::Info);
+    }
+
     /// Notes what the pet shows after a successful send.
     pub fn mark_shown(&mut self, badge: Option<Badge>) {
         self.shown = badge;
@@ -394,6 +410,9 @@ fn handle_stdin(agy_event: Option<&str>) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0);
+    if decision.is_some_and(|decision| decision.user_prompt) {
+        state.badges.clear_info();
+    }
     // Every event counts for badges, even ones that leave the pet alone:
     // any activity means the session is no longer waiting on the user.
     let badge = state.badges.update(
@@ -545,6 +564,25 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_in_any_session_clears_every_info_badge_but_not_a_question() {
+        let mut board = BadgeBoard::default();
+        board.update("done-earlier", Some(Badge::Info), 1_000);
+        board.update("waiting", Some(Badge::Question), 2_000);
+        board.update("done", Some(Badge::Info), 3_000);
+        board.mark_shown(Some(Badge::Question));
+
+        for prompt in [
+            map_event(&json!({ "hook_event_name": "UserPromptSubmit" })).unwrap(),
+            map_agy_event("PreInvocation", &json!({ "invocationNum": 0 })).unwrap(),
+        ] {
+            assert!(prompt.user_prompt);
+        }
+        board.clear_info();
+        // The answered question goes, and no stale `i` from another session replaces it.
+        assert_eq!(board.update("waiting", None, 4_000), Some(None));
+    }
+
+    #[test]
     fn a_finished_answer_does_not_hide_a_session_waiting_on_the_user() {
         let mut board = BadgeBoard::default();
         board.update("waiting", Some(Badge::Question), 1_000);
@@ -591,6 +629,7 @@ mod tests {
             reaction: Reaction::Editing,
             speech: None,
             badge: None,
+            user_prompt: false,
         };
         let mut throttle = Throttle::default();
 

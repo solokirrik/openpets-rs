@@ -85,11 +85,11 @@ keep restarting the animation. Speech bubbles only ever show fixed canned
 lines, never agent text. A hook never starts the app and always exits 0.
 Set `OPENPETS_DEBUG=1` to see why an event was dropped.
 
-A badge stays above the pet until that session's next event: you answered,
-the tool ran, the reply finished, or (for `i`) you sent the next prompt.
-Clicking the pet also dismisses it. Badges are tracked per session, so
-another session carrying on doesn't clear one still waiting on you, and a
-`?` or `!` always wins over an `i` from a session that is merely done.
+A `?`/`!` badge stays above the pet until that session's next event (you
+answered, the tool ran, or the reply finished). These are tracked per
+session, so another session carrying on doesn't clear one still waiting on
+you, and they always win over an `i`. An `i` clears as soon as you send a
+prompt in any session. Clicking the pet dismisses whatever badge is shown.
 
 ### Antigravity (`agy`) hooks
 
