@@ -19,14 +19,32 @@ scripts/bundle.sh         # build target/bundle/OpenPets.app
 - **Right-click** the pet, or use the **menu bar item**, to pick a pet, start a timer, pause walking, open the pets folder, or quit.
 - **Timer** (5 min to 1 hour) shows a small countdown above the pet; when it ends the pet celebrates with a chime. It is not saved across restarts.
 
+## Install
+
+```sh
+scripts/bundle.sh
+pkill -x openpets-rs; rm -rf ~/Applications/OpenPets.app
+cp -R target/bundle/OpenPets.app ~/Applications/
+open ~/Applications/OpenPets.app
+```
+
+Use `~/Applications`, not `/Applications`: the Electron OpenPets app is
+called `openpets.app`, and on a case-insensitive filesystem the two names
+clash.
+
+The MCP and hook setup below saves the path of the binary you run it with,
+so run it from the installed app
+(`~/Applications/OpenPets.app/Contents/MacOS/openpets-rs`), not from
+`target/`, which `cargo clean` deletes. Reinstalling to the same place keeps
+those paths working. It does stop the running MCP server, so reconnect
+afterwards (`/mcp` in Claude Code).
+
 ## Connect a coding agent (MCP)
 
 The same binary is the MCP server, speaking stdio:
 
 ```sh
-claude mcp add openpets -- /path/to/openpets-rs mcp
-# or, after bundling:
-claude mcp add openpets -- /path/to/OpenPets.app/Contents/MacOS/openpets-rs mcp
+claude mcp add openpets -- ~/Applications/OpenPets.app/Contents/MacOS/openpets-rs mcp
 ```
 
 Tools (the OpenPets MCP package contract, plus a timer):
