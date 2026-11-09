@@ -11,9 +11,14 @@
 //! Code has no "answered" event, but the session always moves on right after
 //! the user responds. Badges are tracked per session, so another session
 //! carrying on does not clear one still waiting on the user.
+//!
+//! `openpets-rs hook agy <Event>` does the same for Antigravity (`agy`),
+//! whose payloads carry no event name (hence the argument) and which runs
+//! hooks synchronously, waiting for a JSON reply on stdout. That reply is
+//! written first, on every path, and never changes what the agent does.
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -121,15 +126,93 @@ pub fn map_event(payload: &Value) -> Option<Decision> {
 fn tool_reaction(tool: &str, payload: &Value) -> Option<Reaction> {
     match tool {
         "Edit" | "Write" | "MultiEdit" => Some(Reaction::Editing),
-        "Bash" => {
-            let command = payload
-                .pointer("/tool_input/command")
+        "Bash" => test_reaction(payload.pointer("/tool_input/command")),
+        _ => None,
+    }
+}
+
+fn test_reaction(command: Option<&Value>) -> Option<Reaction> {
+    let command = command.and_then(Value::as_str).unwrap_or_default();
+    let command: String = command.chars().take(300).collect();
+    TEST_COMMAND.is_match(&command).then_some(Reaction::Testing)
+}
+
+/// Antigravity tools that change files. The CLI uses the first three; the
+/// documented IDE names follow.
+pub const AGY_EDIT_TOOLS: [&str; 6] = [
+    "edit_file",
+    "write_file",
+    "multi_edit",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+];
+pub const AGY_COMMAND_TOOL: &str = "run_command";
+pub const AGY_QUESTION_TOOL: &str = "ask_question";
+
+/// Maps one Antigravity hook payload to what the pet should do. `event` is
+/// the name `install-hooks agy` put on the command line.
+pub fn map_agy_event(event: &str, payload: &Value) -> Option<Decision> {
+    let tool = payload
+        .pointer("/toolCall/name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let quiet = |reaction| Decision {
+        reaction,
+        speech: None,
+        badge: None,
+    };
+
+    match event {
+        // PreInvocation fires before every model step; only the first
+        // (0-based) starts a turn, later ones would undo editing/testing.
+        "PreInvocation" => {
+            let first = payload.get("invocationNum").and_then(Value::as_u64) == Some(0);
+            first.then(|| quiet(Reaction::Thinking))
+        }
+        "PreToolUse" if tool == AGY_QUESTION_TOOL => Some(Decision {
+            reaction: Reaction::Waiting,
+            speech: Some(Speech::Question),
+            badge: Some(Badge::Question),
+        }),
+        "PostToolUse" if AGY_EDIT_TOOLS.contains(&tool) => Some(quiet(Reaction::Editing)),
+        "PostToolUse" if tool == AGY_COMMAND_TOOL => {
+            test_reaction(payload.pointer("/toolCall/args/CommandLine")).map(quiet)
+        }
+        "Stop" => {
+            let reason = payload
+                .get("terminationReason")
                 .and_then(Value::as_str)
-                .unwrap_or_default();
-            let command: String = command.chars().take(300).collect();
-            TEST_COMMAND.is_match(&command).then_some(Reaction::Testing)
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            let failed = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|error| !error.is_empty());
+            if failed || reason.contains("ERROR") {
+                Some(Decision {
+                    reaction: Reaction::Error,
+                    speech: Some(Speech::Error),
+                    badge: None,
+                })
+            } else if reason.contains("CANCEL") {
+                None
+            } else {
+                Some(quiet(Reaction::Success))
+            }
         }
         _ => None,
+    }
+}
+
+/// The JSON Antigravity requires on stdout. `"allow"` keeps agy's own
+/// permission rules in charge (unlike `"auto_approve"`), and any `Stop`
+/// decision other than `"continue"` lets the agent stop.
+pub fn agy_reply(event: &str) -> &'static str {
+    match event {
+        "PreToolUse" => r#"{"decision":"allow"}"#,
+        "Stop" => r#"{"decision":"stop"}"#,
+        _ => "{}",
     }
 }
 
@@ -257,16 +340,31 @@ pub fn plan_request(decision: Decision, throttle: &mut Throttle, now_ms: u64) ->
     }
 }
 
+/// Handles one Claude Code hook event.
 pub fn run() {
+    report(handle_stdin(None));
+}
+
+/// Handles one Antigravity hook event, replying on stdout before anything
+/// else can fail or take time.
+pub fn run_agy(event: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{}", agy_reply(event));
+    let _ = stdout.flush();
+    drop(stdout);
+    report(handle_stdin(Some(event)));
+}
+
+fn report(result: Result<(), String>) {
     let debug = std::env::var_os("OPENPETS_DEBUG").is_some_and(|value| value == "1");
-    if let Err(reason) = handle_stdin()
+    if let Err(reason) = result
         && debug
     {
         eprintln!("[hook] ignored: {reason}");
     }
 }
 
-fn handle_stdin() -> Result<(), String> {
+fn handle_stdin(agy_event: Option<&str>) -> Result<(), String> {
     let mut raw = String::new();
     std::io::stdin()
         .take(MAX_PAYLOAD_BYTES)
@@ -274,9 +372,13 @@ fn handle_stdin() -> Result<(), String> {
         .map_err(|error| format!("cannot read the payload: {error}"))?;
     let payload: Value = serde_json::from_str(&raw).map_err(|_| "payload is not JSON")?;
 
-    let decision = map_event(&payload);
+    let decision = match agy_event {
+        Some(event) => map_agy_event(event, &payload),
+        None => map_event(&payload),
+    };
     let session = payload
         .get("session_id")
+        .or_else(|| payload.get("conversationId"))
         .and_then(Value::as_str)
         .unwrap_or_default();
 
@@ -450,6 +552,125 @@ mod tests {
         assert!(plan_request(decision, &mut throttle, 100_000).is_some());
         assert!(plan_request(decision, &mut throttle, 105_000).is_none());
         assert!(plan_request(decision, &mut throttle, 111_000).is_some());
+    }
+
+    fn agy_reaction(event: &str, payload: Value) -> Option<Reaction> {
+        map_agy_event(event, &payload).map(|decision| decision.reaction)
+    }
+
+    // Payload shapes below were captured from agy 1.5.3.
+    #[test]
+    fn maps_antigravity_events_to_reactions() {
+        assert_eq!(
+            agy_reaction(
+                "PreInvocation",
+                json!({ "invocationNum": 0, "initialNumSteps": 1 })
+            ),
+            Some(Reaction::Thinking)
+        );
+        assert_eq!(
+            agy_reaction(
+                "PostToolUse",
+                json!({ "error": "", "toolCall": { "name": "edit_file", "args": { "Target": "hi" } } })
+            ),
+            Some(Reaction::Editing)
+        );
+        assert_eq!(
+            agy_reaction(
+                "PostToolUse",
+                json!({ "toolCall": { "name": "run_command", "args": { "CommandLine": "cargo test" } } })
+            ),
+            Some(Reaction::Testing)
+        );
+        assert_eq!(
+            agy_reaction(
+                "Stop",
+                json!({ "error": "", "executionNum": 0, "fullyIdle": true, "terminationReason": "NO_TOOL_CALL" })
+            ),
+            Some(Reaction::Success)
+        );
+        assert_eq!(
+            agy_reaction("Stop", json!({ "terminationReason": "error" })),
+            Some(Reaction::Error)
+        );
+        assert_eq!(
+            agy_reaction("Stop", json!({ "terminationReason": "USER_CANCELED" })),
+            None
+        );
+    }
+
+    #[test]
+    fn later_antigravity_steps_do_not_restart_thinking() {
+        assert_eq!(
+            agy_reaction(
+                "PreInvocation",
+                json!({ "invocationNum": 1, "initialNumSteps": 3 })
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn routine_antigravity_tools_leave_the_pet_alone() {
+        assert_eq!(
+            agy_reaction(
+                "PostToolUse",
+                json!({ "toolCall": { "name": "run_command", "args": { "CommandLine": "ls" } } })
+            ),
+            None
+        );
+        assert_eq!(
+            agy_reaction(
+                "PostToolUse",
+                json!({ "toolCall": { "name": "read_file" } })
+            ),
+            None
+        );
+        // A tool about to run is never an edit: only PostToolUse counts.
+        assert_eq!(
+            agy_reaction("PreToolUse", json!({ "toolCall": { "name": "edit_file" } })),
+            None
+        );
+    }
+
+    #[test]
+    fn an_antigravity_question_shows_a_badge_that_its_answer_clears() {
+        let asked = map_agy_event(
+            "PreToolUse",
+            &json!({ "toolCall": { "name": "ask_question" } }),
+        )
+        .unwrap();
+        assert_eq!(asked.speech, Some(Speech::Question));
+        assert_eq!(asked.badge, Some(Badge::Question));
+
+        let answered = map_agy_event(
+            "PostToolUse",
+            &json!({ "toolCall": { "name": "ask_question" } }),
+        );
+        let mut board = BadgeBoard::default();
+        board.update("c", asked.badge, 1_000);
+        board.mark_shown(asked.badge);
+        assert_eq!(
+            board.update("c", answered.and_then(|decision| decision.badge), 2_000),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn antigravity_always_gets_a_reply_that_leaves_the_agent_in_charge() {
+        for event in [
+            "PreInvocation",
+            "PostToolUse",
+            "PreToolUse",
+            "Stop",
+            "Unknown",
+        ] {
+            let reply: Value = serde_json::from_str(agy_reply(event)).unwrap();
+            assert!(reply.is_object(), "{event}");
+        }
+        assert_eq!(agy_reply("PreToolUse"), r#"{"decision":"allow"}"#);
+        let stop: Value = serde_json::from_str(agy_reply("Stop")).unwrap();
+        assert_ne!(stop["decision"], "continue");
     }
 
     #[test]

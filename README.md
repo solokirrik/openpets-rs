@@ -43,7 +43,7 @@ If the pet isn't running, the MCP server starts it on the first `react`,
 and isn't an error. Results include `structuredContent`, and tools carry titles and
 read-only/idempotent annotations.
 
-## Claude Code hooks
+## Hooks (Claude Code, Antigravity)
 
 With MCP, the pet only reacts when the agent decides to call a tool. Hooks
 make it react on its own while you work:
@@ -71,6 +71,27 @@ The `?`/`!` badge stays above the pet until that Claude Code session's next
 event (you answered, the tool ran, or the reply finished). Badges are tracked
 per session, so another session carrying on doesn't clear one still waiting
 on you.
+
+### Antigravity (`agy`) hooks
+
+```sh
+openpets-rs install-hooks agy     # sets an "openpets" hook in ~/.gemini/config/hooks.json
+openpets-rs uninstall-hooks agy   # removes only that hook
+```
+
+| agy event | Pet |
+|-----------|-----|
+| `PreInvocation` (first step of a turn) | thinking |
+| `PostToolUse` on a file edit or write | editing |
+| `PostToolUse` on a `run_command` test command | testing |
+| `PreToolUse` on `ask_question` | waiting + a question line and a `?` badge, cleared once answered |
+| `Stop` | success (error + a canned line if the run failed; nothing if cancelled) |
+
+agy waits for each hook and reads a JSON reply, so these hooks always answer
+immediately and never change what the agent does. `PreToolUse` is only
+registered for `ask_question` and answers `allow`, which leaves agy's own
+permission rules in charge. agy has no hook for its built-in approval
+prompts, so there is no `!` badge.
 
 ## Pets
 

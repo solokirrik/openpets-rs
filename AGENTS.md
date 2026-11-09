@@ -35,6 +35,17 @@ immediately.
 - Hooks (`openpets-rs hook`) must never disturb Claude Code: swallow every
   error, always exit 0, never launch the app. The MCP server may auto-launch
   the app, but only for `react`/`say`, not `status`.
+- Antigravity (`agy`) hooks are opt-in (`install-hooks agy`) and run
+  synchronously: `hook agy <Event>` writes the required stdout JSON first, on
+  every path. The payloads carry no event name, hence the argument. Never
+  register `PreToolUse` beyond `ask_question` or reply with anything that
+  grants permissions (`auto_approve`). `"allow"` was checked to leave agy's
+  permission rules in charge.
+- agy's docs disagree with the CLI (checked on 1.5.3). The CLI uses
+  `edit_file`, `write_file` and `run_command` (`args.CommandLine`), a
+  0-based `invocationNum`, and `Stop` sends `terminationReason:
+  "NO_TOOL_CALL"`. Capture real payloads with a probe hook in a scratch
+  workspace's `.agents/hooks.json` before changing the mapping.
 - Speech is validated in one place (`reaction::validate_message`): 1–140
   chars, one line, no code/URLs/paths/secrets. Hooks only send canned lines.
 - MCP stdout carries protocol only; all diagnostics go to stderr.

@@ -5,7 +5,7 @@
 //! every other setting and hook is preserved. A settings file that is not
 //! valid JSON is left alone and reported.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -34,8 +34,22 @@ pub fn settings_path() -> PathBuf {
 
 /// The shell command Claude Code should run, quoting the binary path.
 pub fn hook_command(executable: &str) -> String {
-    let quoted = executable.replace('\'', r"'\''");
-    format!("'{quoted}'{HOOK_SUFFIX}")
+    format!("{}{HOOK_SUFFIX}", shell_quote(executable))
+}
+
+/// Single-quotes `text` for `sh`.
+pub fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// This binary's path, for hook commands.
+pub fn current_executable() -> Result<String, String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("cannot locate this binary: {error}"))?;
+    executable
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "binary path is not valid UTF-8".to_owned())
 }
 
 fn is_our_command(command: &str) -> bool {
@@ -109,27 +123,25 @@ pub fn remove_hooks(mut settings: Value) -> Result<Value, String> {
 }
 
 pub fn install() -> Result<(), String> {
-    let executable =
-        std::env::current_exe().map_err(|error| format!("cannot locate this binary: {error}"))?;
-    let executable = executable
-        .to_str()
-        .ok_or("binary path is not valid UTF-8")?;
-    let command = hook_command(executable);
-    update_settings(|settings| add_hooks(settings, &command))?;
+    let command = hook_command(&current_executable()?);
+    update_json_file(&settings_path(), |settings| add_hooks(settings, &command))?;
     println!("Installed Claude Code hooks running: {command}");
     println!("Restart Claude Code sessions to pick them up.");
     Ok(())
 }
 
 pub fn uninstall() -> Result<(), String> {
-    update_settings(remove_hooks)?;
+    update_json_file(&settings_path(), remove_hooks)?;
     println!("Removed openpets-rs hooks from Claude Code settings.");
     Ok(())
 }
 
-fn update_settings(change: impl FnOnce(Value) -> Result<Value, String>) -> Result<(), String> {
-    let path = settings_path();
-    let settings = match std::fs::read_to_string(&path) {
+/// Rewrites the JSON object at `path` (a missing file reads as `{}`).
+pub fn update_json_file(
+    path: &Path,
+    change: impl FnOnce(Value) -> Result<Value, String>,
+) -> Result<(), String> {
+    let settings = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).map_err(|error| {
             format!(
                 "{} is not valid JSON ({error}); left unchanged",
@@ -148,11 +160,11 @@ fn update_settings(change: impl FnOnce(Value) -> Result<Value, String>) -> Resul
         std::fs::create_dir_all(dir)
             .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
     }
-    // Write beside the target and rename, so Claude Code never reads a half-written file.
+    // Write beside the target and rename, so the agent never reads a half-written file.
     let temporary = path.with_extension("json.openpets-rs.tmp");
     std::fs::write(&temporary, text)
         .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, &path)
+    std::fs::rename(&temporary, path)
         .map_err(|error| format!("cannot replace {}: {error}", path.display()))
 }
 
