@@ -14,7 +14,7 @@ scripts/bundle.sh         # build target/bundle/OpenPets.app
 ```
 
 - **Drag** the pet anywhere. When you let go, it drops back to the bottom of the screen.
-- **Click** the pet to make it wave (and dismiss a `?`/`!` badge).
+- **Click** the pet to make it wave (and dismiss a `?`/`!`/`i` badge).
 - With an auto-hiding Dock, the pet steps up onto the Dock while it is shown and drops back down when it hides.
 - **Right-click** the pet, or use the **menu bar item**, to pick a pet, start a timer, pause walking, open the pets folder, or quit.
 - **Timer** (5 min to 1 hour) shows a small countdown above the pet; when it ends the pet celebrates with a chime. It is not saved across restarts.
@@ -77,18 +77,19 @@ openpets-rs uninstall-hooks   # removes only those entries
 | `PreToolUse` on Edit, Write or MultiEdit | editing |
 | `PreToolUse` on a Bash test command (`cargo test`, `pnpm test`, …) | testing |
 | `PermissionRequest` | waiting + "Approval needed" and a `!` badge (a question line and `?` for AskUserQuestion) |
-| `Stop` | success |
-| `StopFailure` | error + a short canned line |
+| `Stop` | success and an `i` badge (the answer is ready) |
+| `StopFailure` | error + a short canned line, and an `i` badge |
 
 Each reaction is throttled to once every 10 s, so a burst of edits doesn't
 keep restarting the animation. Speech bubbles only ever show fixed canned
 lines, never agent text. A hook never starts the app and always exits 0.
 Set `OPENPETS_DEBUG=1` to see why an event was dropped.
 
-The `?`/`!` badge stays above the pet until that Claude Code session's next
-event (you answered, the tool ran, or the reply finished). Badges are tracked
-per session, so another session carrying on doesn't clear one still waiting
-on you.
+A badge stays above the pet until that session's next event: you answered,
+the tool ran, the reply finished, or (for `i`) you sent the next prompt.
+Clicking the pet also dismisses it. Badges are tracked per session, so
+another session carrying on doesn't clear one still waiting on you, and a
+`?` or `!` always wins over an `i` from a session that is merely done.
 
 ### Antigravity (`agy`) hooks
 
@@ -103,7 +104,7 @@ openpets-rs uninstall-hooks agy   # removes only that hook
 | `PostToolUse` on a file edit or write | editing |
 | `PostToolUse` on a `run_command` test command | testing |
 | `PreToolUse` on `ask_question` | waiting + a question line and a `?` badge, cleared once answered |
-| `Stop` | success (error + a canned line if the run failed; nothing if cancelled) |
+| `Stop` | success and an `i` badge (error + a canned line if the run failed; nothing if cancelled) |
 
 agy waits for each hook and reads a JSON reply, so these hooks always answer
 immediately and never change what the agent does. `PreToolUse` is only

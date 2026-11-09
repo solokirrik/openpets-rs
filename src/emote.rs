@@ -1,4 +1,4 @@
-//! Pixel-art `!` and `?` shown over the pet's head, like game emotes.
+//! Pixel-art `!`, `?` and `i` shown over the pet's head, like game emotes.
 //!
 //! Each emote is drawn on a small grid, one cell per image pixel; the app
 //! scales it up with nearest-neighbour filtering so the pixels stay crisp
@@ -38,9 +38,25 @@ const QUESTION: [&str; 12] = [
     "..####..", //
 ];
 
+const INFO: [&str; 12] = [
+    ".####.", //
+    "#oooo#", //
+    ".####.", //
+    "......", //
+    "####..", //
+    "#ooo#.", //
+    ".#oo#.", //
+    ".#oo#.", //
+    ".#oo#.", //
+    "##oo##", //
+    "#oooo#", //
+    "######", //
+];
+
 const OUTLINE: [u8; 4] = [26, 22, 30, 255];
-const ALERT_FILL: [u8; 4] = [255, 200, 40, 255];
-const QUESTION_FILL: [u8; 4] = [90, 200, 255, 255];
+const ALERT_FILL: [u8; 4] = [235, 64, 52, 255];
+const QUESTION_FILL: [u8; 4] = [255, 200, 40, 255];
+const INFO_FILL: [u8; 4] = [90, 200, 255, 255];
 
 /// The emote for `badge` at one pixel per grid cell (opaque colours, so
 /// premultiplied and straight alpha agree).
@@ -48,6 +64,7 @@ pub fn render(badge: Badge) -> Rgba {
     let (art, fill): (&[&str], _) = match badge {
         Badge::Alert => (&ALERT, ALERT_FILL),
         Badge::Question => (&QUESTION, QUESTION_FILL),
+        Badge::Info => (&INFO, INFO_FILL),
     };
     let width = art[0].len();
     let mut image = Rgba::new(width, art.len());
@@ -73,7 +90,7 @@ mod tests {
     /// smear the image (rows are copied at the first row's width).
     #[test]
     fn emote_art_is_rectangular() {
-        for art in [&ALERT[..], &QUESTION[..]] {
+        for art in [&ALERT[..], &QUESTION[..], &INFO[..]] {
             assert!(art.iter().all(|row| row.len() == art[0].len()));
         }
     }

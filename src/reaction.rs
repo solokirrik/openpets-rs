@@ -24,13 +24,21 @@ pub enum Reaction {
     Celebrating,
 }
 
-/// A mark above the pet's head that stays until the situation changes,
-/// for things that need the user: `?` for a question, `!` for an approval.
+/// A mark above the pet's head that stays until the situation changes:
+/// `?` for a question, `!` for an approval, `i` for a finished answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Badge {
     Question,
     Alert,
+    Info,
+}
+
+impl Badge {
+    /// Whether the agent is blocked on the user, as opposed to just done.
+    pub fn needs_user(self) -> bool {
+        matches!(self, Badge::Question | Badge::Alert)
+    }
 }
 
 impl Reaction {

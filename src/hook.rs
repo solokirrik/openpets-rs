@@ -7,10 +7,11 @@
 //! always 0. Set `OPENPETS_DEBUG=1` to see why an event was dropped.
 //!
 //! A permission request also puts a badge over the pet (`?` for a question,
-//! `!` for an approval) that stays until that session's next event: Claude
-//! Code has no "answered" event, but the session always moves on right after
-//! the user responds. Badges are tracked per session, so another session
-//! carrying on does not clear one still waiting on the user.
+//! `!` for an approval), and a finished answer puts up `i`. A badge stays
+//! until that session's next event: Claude Code has no "answered" or "read"
+//! event, but the session always moves on once the user responds. Badges
+//! are tracked per session, so another session carrying on does not clear
+//! one still waiting on the user, and `?`/`!` outrank `i`.
 //!
 //! `openpets-rs hook agy <Event>` does the same for Antigravity (`agy`),
 //! whose payloads carry no event name (hence the argument) and which runs
@@ -114,6 +115,7 @@ pub fn map_event(payload: &Value) -> Option<Decision> {
     let badge = match (event, tool) {
         ("PermissionRequest", "AskUserQuestion") => Some(Badge::Question),
         ("PermissionRequest", _) => Some(Badge::Alert),
+        ("Stop" | "StopFailure", _) => Some(Badge::Info),
         _ => None,
     };
     Some(Decision {
@@ -193,12 +195,15 @@ pub fn map_agy_event(event: &str, payload: &Value) -> Option<Decision> {
                 Some(Decision {
                     reaction: Reaction::Error,
                     speech: Some(Speech::Error),
-                    badge: None,
+                    badge: Some(Badge::Info),
                 })
             } else if reason.contains("CANCEL") {
                 None
             } else {
-                Some(quiet(Reaction::Success))
+                Some(Decision {
+                    badge: Some(Badge::Info),
+                    ..quiet(Reaction::Success)
+                })
             }
         }
         _ => None,
@@ -300,10 +305,11 @@ impl BadgeBoard {
             }
         }
 
+        // Anything blocked on the user beats a finished answer; then the newest.
         let wanted = self
             .pending
             .values()
-            .max_by_key(|pending| pending.since_ms)
+            .max_by_key(|pending| (pending.badge.needs_user(), pending.since_ms))
             .map(|pending| pending.badge);
         // A new request is always sent: the user may have clicked the last
         // badge away, so "already shown" cannot be trusted for it.
@@ -516,6 +522,45 @@ mod tests {
         assert_eq!(board.update("b", None, 2_000), None);
         // The waiting session's next event (any event) clears it.
         assert_eq!(board.update("a", None, 3_000), Some(None));
+    }
+
+    #[test]
+    fn a_finished_answer_shows_info_until_the_next_prompt() {
+        for event in ["Stop", "StopFailure"] {
+            let decision = map_event(&json!({ "hook_event_name": event })).unwrap();
+            assert_eq!(decision.badge, Some(Badge::Info), "{event}");
+        }
+        let finished = map_agy_event(
+            "Stop",
+            &json!({ "terminationReason": "NO_TOOL_CALL", "error": "" }),
+        )
+        .unwrap();
+        assert_eq!(finished.badge, Some(Badge::Info));
+
+        let mut board = BadgeBoard::default();
+        board.update("a", Some(Badge::Info), 1_000);
+        board.mark_shown(Some(Badge::Info));
+        let prompt = map_event(&json!({ "hook_event_name": "UserPromptSubmit" })).unwrap();
+        assert_eq!(board.update("a", prompt.badge, 2_000), Some(None));
+    }
+
+    #[test]
+    fn a_finished_answer_does_not_hide_a_session_waiting_on_the_user() {
+        let mut board = BadgeBoard::default();
+        board.update("waiting", Some(Badge::Question), 1_000);
+        board.mark_shown(Some(Badge::Question));
+
+        // A newer `i` from another session is recorded but not shown.
+        assert_eq!(
+            board.update("done", Some(Badge::Info), 2_000),
+            Some(Some(Badge::Question))
+        );
+        board.mark_shown(Some(Badge::Question));
+        // Once the question is answered, the `i` surfaces.
+        assert_eq!(
+            board.update("waiting", None, 3_000),
+            Some(Some(Badge::Info))
+        );
     }
 
     #[test]
